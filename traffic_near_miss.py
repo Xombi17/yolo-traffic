@@ -356,6 +356,72 @@ COLOR_YELLOW = (0, 255, 255)
 COLOR_ORANGE = (0, 165, 255)
 COLOR_RED = (0, 0, 255)
 
+# ===================== Bonus B1: Danger Heatmap =====================
+
+HEATMAP_SIGMA = 20.0
+HEATMAP_ALPHA = 0.3
+HEATMAP_DECAY = 0.995
+
+heatmap = None
+
+def init_heatmap(frame_shape):
+    """Initialize float32 heatmap array sized to frame."""
+    global heatmap
+    h, w = frame_shape[:2]
+    heatmap = np.zeros((h, w), dtype=np.float32)
+
+def gaussian_2d(x, y, cx, cy, sigma):
+    """2D Gaussian function."""
+    return np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * sigma ** 2))
+
+def update_heatmap(near_miss_pairs, frame_shape):
+    """Add Gaussian blobs at midpoints of near-miss pairs and decay."""
+    global heatmap
+    if heatmap is None:
+        init_heatmap(frame_shape)
+    
+    h, w = frame_shape[:2]
+    
+    # Decay existing heatmap
+    heatmap *= HEATMAP_DECAY
+    
+    # Add Gaussian blobs for each near-miss pair
+    for p in near_miss_pairs:
+        cx_a, cy_a = p["center_a"]
+        cx_b, cy_b = p["center_b"]
+        mid_x = int((cx_a + cx_b) / 2)
+        mid_y = int((cy_a + cy_b) / 2)
+        
+        if 0 <= mid_x < w and 0 <= mid_y < h:
+            # Create Gaussian blob (local region for efficiency)
+            radius = int(3 * HEATMAP_SIGMA)
+            y_min = max(0, mid_y - radius)
+            y_max = min(h, mid_y + radius + 1)
+            x_min = max(0, mid_x - radius)
+            x_max = min(w, mid_x + radius + 1)
+            
+            if y_min < y_max and x_min < x_max:
+                yy, xx = np.mgrid[y_min:y_max, x_min:x_max]
+                blob = gaussian_2d(xx, yy, mid_x, mid_y, HEATMAP_SIGMA)
+                heatmap[y_min:y_max, x_min:x_max] = np.maximum(
+                    heatmap[y_min:y_max, x_min:x_max], blob
+                )
+
+def draw_heatmap_overlay(frame):
+    """Blend Jet-colormap heatmap onto frame with alpha."""
+    global heatmap
+    if heatmap is None:
+        return
+    
+    # Normalize heatmap to 0-255
+    hm_norm = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+    
+    # Apply Jet colormap
+    hm_colored = cv2.applyColorMap(hm_norm, cv2.COLORMAP_JET)
+    
+    # Blend with alpha
+    cv2.addWeighted(hm_colored, HEATMAP_ALPHA, frame, 1.0 - HEATMAP_ALPHA, 0, frame)
+
 
 def get_box_color(track_id, interacting_pairs, near_miss_pairs):
     """Determine box color based on interaction/risk/near-miss status."""
@@ -602,6 +668,10 @@ def main():
             # Stage 6: Draw near-miss overlay
             for p in near_miss_pairs:
                 draw_near_miss_overlay(frame, p)
+
+            # Bonus B1: Update and draw danger heatmap
+            update_heatmap(near_miss_pairs, frame.shape)
+            draw_heatmap_overlay(frame)
 
         else:
             risk_history.append(0)
