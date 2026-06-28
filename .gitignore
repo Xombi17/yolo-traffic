@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+*.so
+
+# Virtual environments
+yolo-env/
+venv/
+.venv/
+env/
+
+# Model weights
+*.pt
+
+# Video & media (large generated/downloaded files)
+*.mp4
+*.webm
+*.avi
+*.mov
+*.mkv
+*.flv
+
+# Output artifacts
+output_*.mp4
+output_*.avi
+output_*.webm
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
