@@ -537,7 +537,8 @@ COLOR_RED = (0, 0, 255)
 
 HEATMAP_SIGMA = 20.0
 HEATMAP_ALPHA = 0.3
-HEATMAP_DECAY = 0.995
+HEATMAP_DECAY = 0.95
+HEATMAP_CLIP_MIN = 1.0
 
 heatmap = None
 
@@ -590,8 +591,13 @@ def draw_heatmap_overlay(frame):
     if heatmap is None:
         return
     
+    # Clip small residual values so decayed hotspots don't turn the frame blue
+    hm_clipped = np.where(heatmap < HEATMAP_CLIP_MIN, 0.0, heatmap)
+    if hm_clipped.max() < 0.001:
+        return
+    
     # Normalize heatmap to 0-255
-    hm_norm = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+    hm_norm = cv2.normalize(hm_clipped, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
     
     # Apply Jet colormap
     hm_colored = cv2.applyColorMap(hm_norm, cv2.COLORMAP_JET)

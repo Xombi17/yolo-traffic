@@ -19,6 +19,7 @@ env/
 
 # Video & media (large generated/downloaded files)
 *.mp4
+!assets/readme_clip.mp4
 *.webm
 *.avi
 *.mov

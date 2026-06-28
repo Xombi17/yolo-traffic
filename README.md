@@ -6,6 +6,8 @@ Built with Ultralytics YOLO26 for object detection and ByteTrack for multi-objec
 
 ## Demo
 
+<video src="assets/readme_clip.mp4" controls width="100%"></video>
+
 [![Near-Miss Traffic Analytics](https://img.youtube.com/vi/BdNePB-CfK8/maxresdefault.jpg)](https://www.youtube.com/watch?v=BdNePB-CfK8)
 
 ## Pipeline
