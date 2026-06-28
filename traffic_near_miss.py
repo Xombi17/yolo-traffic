@@ -9,12 +9,24 @@ Usage:
 import argparse
 import json
 import math
+import os
 import time
 from collections import defaultdict, deque
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
+
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        return super().default(obj)
 
 # COCO class ids we care about for road users
 CLASS_NAMES = {
@@ -698,7 +710,7 @@ def generate_safety_report(all_risk_scores, near_miss_events, fps):
     # Intersection Risk Score: average of top 5% highest risk values
     sorted_risks = sorted(all_risk_scores, reverse=True)
     top_5pct = max(1, len(sorted_risks) // 20)
-    report["intersection_risk_score"] = round(sum(sorted_risks[:top_5pct]) / top_5pct, 2)
+    report["intersection_risk_score"] = float(round(sum(sorted_risks[:top_5pct]) / top_5pct, 2))
 
     # Most dangerous 30-second window
     window_frames = int(30 * fps)
@@ -713,9 +725,9 @@ def generate_safety_report(all_risk_scores, near_miss_events, fps):
     report["most_dangerous_30s_window"] = {
         "start_frame": max_start,
         "end_frame": max_start + window_frames,
-        "mean_risk": round(max_mean, 2),
-        "start_time_sec": round(max_start / fps, 2),
-        "end_time_sec": round((max_start + window_frames) / fps, 2),
+        "mean_risk": float(round(max_mean, 2)),
+        "start_time_sec": float(round(max_start / fps, 2)),
+        "end_time_sec": float(round((max_start + window_frames) / fps, 2)),
     }
 
     # Object type involvement
@@ -728,7 +740,7 @@ def generate_safety_report(all_risk_scores, near_miss_events, fps):
 
     # Near-miss timestamps
     report["near_miss_timestamps"] = [
-        {"frame": e["frame"], "pair_ids": e["pair_ids"], "peak_risk": e["peak_risk"]}
+        {"frame": e["frame"], "pair_ids": e["pair_ids"], "peak_risk": float(e["peak_risk"])}
         for e in near_miss_events
     ]
 
@@ -942,10 +954,10 @@ def main():
 
     report = generate_safety_report(all_risk_scores, near_miss_events, fps)
     print("--- Safety Report (B4) ---")
-    print(json.dumps(report, indent=2))
-    report_path = args.output.rsplit(".", 1)[0] + "_safety_report.json"
+    print(json.dumps(report, indent=2, cls=NumpyEncoder))
+    report_path = os.path.join(output_dir, "safety_report.json")
     with open(report_path, "w") as f:
-        json.dump(report, f, indent=2)
+        json.dump(report, f, indent=2, cls=NumpyEncoder)
     print(f"Safety report saved to {report_path}")
 
 
