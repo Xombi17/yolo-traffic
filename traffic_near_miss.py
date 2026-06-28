@@ -38,9 +38,14 @@ IOU_THRESHOLD = 0.0
 # Bonus B2 — Speed Estimation Constants
 CAMERA_HEIGHT_M = 8.0
 CAMERA_VFOV_DEG = 50.0
+CAMERA_TILT_DEG = 30.0  # camera tilt from horizontal (0=horizontal, 90=straight down)
 
 VEHICLE_CLASSES = {"car", "bus", "truck", "motorcycle", "bicycle"}
 PERSON_CLASS = "person"
+
+# Bonus B3 — Trajectory Prediction Constants
+TRAJECTORY_HORIZON = 15
+PREDICTED_INTERSECTION_THRESHOLD = 30
 
 
 def nearest_edge_distance(box_a, box_b):
@@ -288,22 +293,25 @@ def is_stationary(track_id, track_history):
 def estimate_speed(bbox, frame_height, fps):
     """
     Estimate speed in km/h from bounding box position.
-    Uses perspective projection: meters-per-pixel varies with y-coordinate.
-    Camera height = 8m, vertical FOV = 50°.
+    Uses tilted camera perspective projection.
+    Camera height = 8m, vertical FOV = 50°, tilt = 30° from horizontal.
     """
-    # Meters per pixel at this y-coordinate (approximate perspective)
-    # m_per_px = (2 * height * tan(FOV/2)) / frame_height
     vfov_rad = math.radians(CAMERA_VFOV_DEG)
-    m_per_px_at_center = (2 * CAMERA_HEIGHT_M * math.tan(vfov_rad / 2)) / frame_height
-    
-    # For perspective: objects lower in frame (higher y) are closer, so larger m_per_px
-    # Normalize y to [0, 1] where 0 = top, 1 = bottom
+    tilt_rad = math.radians(CAMERA_TILT_DEG)
+
     y_center = (bbox[1] + bbox[3]) / 2
     y_norm = y_center / frame_height
-    # Simple perspective: scale factor increases toward bottom
-    perspective_scale = 1.0 + y_norm  # 1.0 at top, 2.0 at bottom
-    m_per_px = m_per_px_at_center * perspective_scale
-    
+
+    # Ray angle from horizontal (positive = downward).
+    # y=0 (top)  → tilt - FOV/2  (closer to horizon → farther ground)
+    # y=H (bottom) → tilt + FOV/2 (closer to camera → nearer ground)
+    phi = tilt_rad - vfov_rad / 2 + y_norm * vfov_rad
+    phi = max(phi, math.radians(2.0))  # clamp to avoid blow-up near horizon
+
+    # Ground distance per pixel: m_per_px = (h * α) / (H * sin²(φ))
+    sin_phi = math.sin(phi)
+    m_per_px = (CAMERA_HEIGHT_M * vfov_rad) / (frame_height * sin_phi * sin_phi)
+
     return m_per_px
 
 
@@ -341,6 +349,97 @@ def compute_speed_kmh(track_id, track_history, bbox, frame_height, fps):
     speed_kmh = speed_ms * 3.6
     
     return speed_kmh
+
+
+# --- Bonus B3 — Trajectory Prediction ---
+
+def predict_position(track_id, track_history, horizon=15):
+    """Predict future position using linear velocity from last 5 center positions."""
+    if track_id not in track_history:
+        return None
+    history = track_history[track_id]
+    if len(history) < 2:
+        return None
+    recent = history[-5:] if len(history) >= 5 else history
+    if len(recent) < 2:
+        return None
+    recent_centers = [(int((b[0] + b[2]) / 2), int((b[1] + b[3]) / 2)) for b in recent]
+    mean_vx = 0.0
+    mean_vy = 0.0
+    for i in range(1, len(recent_centers)):
+        mean_vx += recent_centers[i][0] - recent_centers[i - 1][0]
+        mean_vy += recent_centers[i][1] - recent_centers[i - 1][1]
+    n = len(recent_centers) - 1
+    mean_vx /= n
+    mean_vy /= n
+    last_cx, last_cy = recent_centers[-1]
+    pred_cx = int(last_cx + mean_vx * horizon)
+    pred_cy = int(last_cy + mean_vy * horizon)
+    return (pred_cx, pred_cy)
+
+
+def draw_trajectory_arrow(frame, current_box, predicted_pos, color=(0, 255, 255)):
+    """Draw dashed arrow from current center to predicted position."""
+    if predicted_pos is None:
+        return
+    cx = int((current_box[0] + current_box[2]) / 2)
+    cy = int((current_box[1] + current_box[3]) / 2)
+    dx = predicted_pos[0] - cx
+    dy = predicted_pos[1] - cy
+    dist = (dx * dx + dy * dy) ** 0.5
+    if dist < 5:
+        return
+    # Draw dashed line with arrowhead
+    steps = max(int(dist / 10), 1)
+    for i in range(0, steps, 2):
+        t1 = i / steps
+        t2 = min((i + 1) / steps, 1.0)
+        x1 = int(cx + dx * t1)
+        y1 = int(cy + dy * t1)
+        x2 = int(cx + dx * t2)
+        y2 = int(cy + dy * t2)
+        cv2.line(frame, (x1, y1), (x2, y2), color, 1)
+    # Arrowhead
+    arrow_len = 8
+    angle = np.arctan2(dy, dx)
+    tip = (predicted_pos[0], predicted_pos[1])
+    left = (int(tip[0] - arrow_len * np.cos(angle - 0.5)),
+            int(tip[1] - arrow_len * np.sin(angle - 0.5)))
+    right = (int(tip[0] - arrow_len * np.cos(angle + 0.5)),
+             int(tip[1] - arrow_len * np.sin(angle + 0.5)))
+    cv2.line(frame, tip, left, color, 1)
+    cv2.line(frame, tip, right, color, 1)
+
+
+def draw_predicted_intersection(frame, box_a, box_b, pred_a, pred_b):
+    """Draw magenta line and label if predicted positions are close."""
+    if pred_a is None or pred_b is None:
+        return
+    dx = pred_a[0] - pred_b[0]
+    dy = pred_a[1] - pred_b[1]
+    dist = (dx * dx + dy * dy) ** 0.5
+    if dist > PREDICTED_INTERSECTION_THRESHOLD:
+        return
+    # Draw dashed magenta line between predicted positions
+    color = (255, 0, 255)
+    ddx = pred_b[0] - pred_a[0]
+    ddy = pred_b[1] - pred_a[1]
+    d = (ddx * ddx + ddy * ddy) ** 0.5
+    if d < 1:
+        return
+    steps = max(int(d / 10), 1)
+    for i in range(0, steps, 2):
+        t1 = i / steps
+        t2 = min((i + 1) / steps, 1.0)
+        x1 = int(pred_a[0] + ddx * t1)
+        y1 = int(pred_a[1] + ddy * t1)
+        x2 = int(pred_a[0] + ddx * t2)
+        y2 = int(pred_a[1] + ddy * t2)
+        cv2.line(frame, (x1, y1), (x2, y2), color, 1)
+    mid_x = int((pred_a[0] + pred_b[0]) / 2)
+    mid_y = int((pred_a[1] + pred_b[1]) / 2)
+    cv2.putText(frame, "PREDICTED INTERSECTION", (mid_x - 80, mid_y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
 
 def update_near_miss_events(pair_key, risk, frame_idx):
@@ -726,6 +825,11 @@ def main():
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
                 )
 
+            # Bonus B3: Draw trajectory arrows for all tracked objects
+            for tid, box in zip(track_ids, boxes):
+                pred_pos = predict_position(tid, track_history, TRAJECTORY_HORIZON)
+                draw_trajectory_arrow(frame, box, pred_pos, (0, 255, 255))
+
             # Stage 3/6: Draw distance lines with risk-based color
             for p in interacting_pairs:
                 risk = p.get("risk", 0)
@@ -736,6 +840,12 @@ def main():
                 else:
                     line_color = COLOR_YELLOW
                 draw_distance_line(frame, p["box_a"], p["box_b"], line_color, risk)
+
+                # Bonus B3: Check predicted intersection for high-risk pairs
+                if risk >= 65:
+                    pred_a = predict_position(p["id_a"], track_history, TRAJECTORY_HORIZON)
+                    pred_b = predict_position(p["id_b"], track_history, TRAJECTORY_HORIZON)
+                    draw_predicted_intersection(frame, p["box_a"], p["box_b"], pred_a, pred_b)
 
             # Stage 6: Draw near-miss overlay
             for p in near_miss_pairs:
