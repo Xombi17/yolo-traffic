@@ -687,6 +687,52 @@ def draw_near_miss_overlay(frame, pair):
                cv2.FONT_HERSHEY_SIMPLEX, 0.8, COLOR_RED, 2)
 
 
+def generate_safety_report(all_risk_scores, near_miss_events, fps):
+    report = {}
+    if not all_risk_scores:
+        report["error"] = "No frames processed"
+        return report
+
+    # Intersection Risk Score: average of top 5% highest risk values
+    sorted_risks = sorted(all_risk_scores, reverse=True)
+    top_5pct = max(1, len(sorted_risks) // 20)
+    report["intersection_risk_score"] = round(sum(sorted_risks[:top_5pct]) / top_5pct, 2)
+
+    # Most dangerous 30-second window
+    window_frames = int(30 * fps)
+    max_mean = 0.0
+    max_start = 0
+    for i in range(len(all_risk_scores) - window_frames + 1):
+        window = all_risk_scores[i:i + window_frames]
+        mean_risk = sum(window) / window_frames
+        if mean_risk > max_mean:
+            max_mean = mean_risk
+            max_start = i
+    report["most_dangerous_30s_window"] = {
+        "start_frame": max_start,
+        "end_frame": max_start + window_frames,
+        "mean_risk": round(max_mean, 2),
+        "start_time_sec": round(max_start / fps, 2),
+        "end_time_sec": round((max_start + window_frames) / fps, 2),
+    }
+
+    # Object type involvement
+    type_involvement = {}
+    for evt in near_miss_events:
+        for cls in (evt["cls_a"], evt["cls_b"]):
+            cls_name = CLASS_NAMES.get(int(cls), str(cls))
+            type_involvement[cls_name] = type_involvement.get(cls_name, 0) + 1
+    report["object_type_involvement"] = type_involvement
+
+    # Near-miss timestamps
+    report["near_miss_timestamps"] = [
+        {"frame": e["frame"], "pair_ids": e["pair_ids"], "peak_risk": e["peak_risk"]}
+        for e in near_miss_events
+    ]
+
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--video", required=True, help="Path to input video")
@@ -722,7 +768,8 @@ def main():
         "peak_risk": 0
     })
     near_miss_count = 0
-    risk_history = []  # per-frame peak risk for timeline
+    risk_history = []  # per-frame peak risk for timeline (capped at 100)
+    all_risk_scores = []  # all per-frame peak risks for B4 report
     near_miss_events = []  # for bonus B4 report
 
     if args.show:
@@ -789,6 +836,7 @@ def main():
             risk_history.append(frame_peak_risk)
             if len(risk_history) > 100:
                 risk_history.pop(0)
+            all_risk_scores.append(frame_peak_risk)
 
             # Create sets for quick lookup
             interacting_ids = set()
@@ -826,7 +874,7 @@ def main():
                 )
 
             # Bonus B3: Draw trajectory arrows for all tracked objects
-            for tid, box in zip(track_ids, boxes):
+            for tid, box in zip(ids, xyxy):
                 pred_pos = predict_position(tid, track_history, TRAJECTORY_HORIZON)
                 draw_trajectory_arrow(frame, box, pred_pos, (0, 255, 255))
 
@@ -859,6 +907,7 @@ def main():
             risk_history.append(0)
             if len(risk_history) > 100:
                 risk_history.pop(0)
+            all_risk_scores.append(0)
 
         # Stage 6: Draw dashboard
         vehicle_count = sum(1 for c in track_class.values() if c in VEHICLE_CLASSES)
@@ -888,6 +937,14 @@ def main():
 
     print(f"Done. {frame_idx} frames processed. Output saved to {args.output}")
     print(f"Total Near-Miss Events: {near_miss_count}")
+
+    report = generate_safety_report(all_risk_scores, near_miss_events, fps)
+    print("--- Safety Report (B4) ---")
+    print(json.dumps(report, indent=2))
+    report_path = args.output.rsplit(".", 1)[0] + "_safety_report.json"
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
+    print(f"Safety report saved to {report_path}")
 
 
 if __name__ == "__main__":
