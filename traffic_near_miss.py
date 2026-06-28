@@ -45,6 +45,7 @@ def main():
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or None  # may be 0/unknown for some containers
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(args.output, fourcc, fps, (width, height))
@@ -56,7 +57,6 @@ def main():
 
     if args.show:
         cv2.namedWindow("Near-Miss Traffic Analytics", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Near-Miss Traffic Analytics", 960, 540)
 
     frame_idx = 0
     while True:
@@ -101,6 +101,14 @@ def main():
                 )
 
         writer.write(frame)
+
+        if frame_idx % 30 == 0:
+            if total_frames:
+                pct = frame_idx / total_frames * 100
+                print(f"  ...frame {frame_idx}/{total_frames} ({pct:.1f}%)")
+            else:
+                print(f"  ...frame {frame_idx} (total unknown)")
+
         if args.show:
             h, w = frame.shape[:2]
             scale = min(DISPLAY_MAX_DIM / max(h, w), 1.0)
