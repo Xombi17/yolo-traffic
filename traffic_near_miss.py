@@ -360,10 +360,12 @@ def predict_position(track_id, track_history, horizon=15):
     history = track_history[track_id]
     if len(history) < 2:
         return None
-    recent = history[-5:] if len(history) >= 5 else history
+    recent = list(history)
+    if len(recent) > 5:
+        recent = recent[-5:]
     if len(recent) < 2:
         return None
-    recent_centers = [(int((b[0] + b[2]) / 2), int((b[1] + b[3]) / 2)) for b in recent]
+    recent_centers = [(int(b[0]), int(b[1])) for b in recent]
     mean_vx = 0.0
     mean_vy = 0.0
     for i in range(1, len(recent_centers)):
