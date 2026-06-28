@@ -35,6 +35,10 @@ EDGE_DIST_SCALE = 1.5
 IOU_EXPAND_SCALE = 1.5
 IOU_THRESHOLD = 0.0
 
+# Bonus B2 — Speed Estimation Constants
+CAMERA_HEIGHT_M = 8.0
+CAMERA_VFOV_DEG = 50.0
+
 VEHICLE_CLASSES = {"car", "bus", "truck", "motorcycle", "bicycle"}
 PERSON_CLASS = "person"
 
@@ -277,6 +281,66 @@ def is_stationary(track_id, track_history):
         total_dist += (dx ** 2 + dy ** 2) ** 0.5
     avg_speed = total_dist / (len(recent) - 1)
     return avg_speed < STATIONARY_SPEED_THRESH
+
+
+# ===================== Bonus B2: Speed Estimation =====================
+
+def estimate_speed(bbox, frame_height, fps):
+    """
+    Estimate speed in km/h from bounding box position.
+    Uses perspective projection: meters-per-pixel varies with y-coordinate.
+    Camera height = 8m, vertical FOV = 50°.
+    """
+    # Meters per pixel at this y-coordinate (approximate perspective)
+    # m_per_px = (2 * height * tan(FOV/2)) / frame_height
+    vfov_rad = math.radians(CAMERA_VFOV_DEG)
+    m_per_px_at_center = (2 * CAMERA_HEIGHT_M * math.tan(vfov_rad / 2)) / frame_height
+    
+    # For perspective: objects lower in frame (higher y) are closer, so larger m_per_px
+    # Normalize y to [0, 1] where 0 = top, 1 = bottom
+    y_center = (bbox[1] + bbox[3]) / 2
+    y_norm = y_center / frame_height
+    # Simple perspective: scale factor increases toward bottom
+    perspective_scale = 1.0 + y_norm  # 1.0 at top, 2.0 at bottom
+    m_per_px = m_per_px_at_center * perspective_scale
+    
+    return m_per_px
+
+
+def compute_speed_kmh(track_id, track_history, bbox, frame_height, fps):
+    """
+    Compute speed in km/h from track history.
+    Uses last 10 frames for velocity estimation.
+    """
+    hist = track_history.get(track_id, [])
+    if len(hist) < 2:
+        return 0.0
+    
+    # Use last 10 frames for velocity
+    n = min(10, len(hist))
+    recent = list(hist)[-n:]
+    
+    # Total pixel displacement
+    dx = recent[-1][0] - recent[0][0]
+    dy = recent[-1][1] - recent[0][1]
+    px_dist = (dx ** 2 + dy ** 2) ** 0.5
+    
+    # Meters per pixel at current position
+    m_per_px = estimate_speed(bbox, frame_height, fps)
+    
+    # Meters traveled over (n-1) frames
+    meters = px_dist * m_per_px
+    
+    # Speed in m/s
+    time_seconds = (n - 1) / fps
+    if time_seconds <= 0:
+        return 0.0
+    speed_ms = meters / time_seconds
+    
+    # Convert to km/h
+    speed_kmh = speed_ms * 3.6
+    
+    return speed_kmh
 
 
 def update_near_miss_events(pair_key, risk, frame_idx):
@@ -651,6 +715,14 @@ def main():
                 label = f"#{track_id} {track_class[track_id]} {conf:.2f}"
                 cv2.putText(
                     frame, label, (int(x1), int(y1) - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
+                )
+
+                # Bonus B2: Display speed in km/h
+                speed_kmh = compute_speed_kmh(track_id, track_history, box, height, fps)
+                speed_label = f"{speed_kmh:.1f} km/h"
+                cv2.putText(
+                    frame, speed_label, (int(x1), int(y2) + 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2,
                 )
 
